@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "Arduino",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/Users/jonfl/AppData/Local/Arduino15/packages/esp32/hardware/esp32/3.2.1/libraries/**",
+                "/Users/jonfl/AppData/Local/Arduino15/packages/esp32/tools/esp32-arduino-libs/idf-release_v5.4-858a988d-v1/esp32s3/**",
+                "/Users/jonfl/OneDrive/Documents2/Arduino/libraries/**"
+            ],
+            "defines": [],
+            "compilerPath": "cl.exe",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "gcc-x64"
+        }
+    ],
+    "version": 4
+}

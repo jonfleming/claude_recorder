@@ -1,14 +1,19 @@
+#include <WiFi.h>
+const char* ssid = "FLEMING";
+const char* password = "aMi4mTsg";
+String lastRecordedFile = "";
+bool uploadMode = true;
 #include "ESP_I2S.h"
 #include "FS.h"
 #include "SD.h"
 
 const uint32_t SAMPLERATE = 16000;
 const int BUFFER_SIZE = 512; // Reduced buffer size for better responsiveness
-const int16_t VOLUME_THRESHOLD = 1000; // Lower threshold for better speech detection
 const int SILENCE_BLOCKS = 20; // Reduced silence blocks
 const byte btnPin = D7;
 const byte ledPin = BUILTIN_LED;
 bool stop = false;
+int16_t VOLUME_THRESHOLD = 1350; // initial Lower threshold for speech detection
 
 I2SClass i2s;
 
@@ -51,7 +56,6 @@ void recordWithSpeechDetection() {
   int silenceBlocks = 0;
   
   Serial.println("Listening for speech...");
-  
   while (1) {
     int validSamples = 0;
     
@@ -61,10 +65,7 @@ void recordWithSpeechDetection() {
         int32_t sample = i2s.read();
         
         // Convert 32-bit sample to 16-bit and apply gain
-        // The sample might need scaling depending on your microphone
-        //buffer[i] = (int16_t)(sample >> 16); // Use upper 16 bits
-        // Alternative: buffer[i] = (int16_t)(sample & 0xFFFF); // Use lower 16 bits
-        buffer[i] = (int16_t)(sample & 0xFFFF); // Use lower 16 bits
+        buffer[i] = (int16_t)((sample & 0xFFFF) * 2); // Use lower 16 bits
         // Or apply gain: buffer[i] = (int16_t)((sample >> 16) * 2); // 2x gain
         
         validSamples++;
@@ -84,16 +85,17 @@ void recordWithSpeechDetection() {
     for (int i = 0; i < validSamples; i++) {
       sum += abs(buffer[i]);
     }
-    uint16_t avg = sum / validSamples;
+    uint16_t avg = sum / validSamples / 2; // Average volume, divided by 2 for sensitivity
     
     // Debug output every 100 blocks
     static int debugCounter = 0;
     if (debugCounter++ % 100 == 0) {
-      Serial.printf("Volume: %d, Recording: %s, Samples: %d\n", 
-                   avg, recording ? "YES" : "NO", validSamples);
+      Serial.printf("\nVolume: %d, Recording: %s, Samples: %d, Threshold: %d\n", 
+                   avg, recording ? "YES" : "NO", validSamples, VOLUME_THRESHOLD);
     }
     
     if (avg > VOLUME_THRESHOLD) {
+      digitalWrite(ledPin, LOW);
       if (debugCounter % 100 == 1) {
         Serial.printf("Avg: %d > Threshold: %d\n", avg, VOLUME_THRESHOLD);
       }
@@ -107,22 +109,27 @@ void recordWithSpeechDetection() {
           Serial.println("Failed to open file for writing!");
           return;
         }
-        
         // Write placeholder header (will be updated later)
         byte header[44] = {0};
         wavFile.write(header, 44);
         samplesWritten = 0;
         recording = true;
-        Serial.printf("Speech detected! Recording to %s\n", filename);
+        digitalWrite(ledPin, LOW); // LED on during recording
+        Serial.printf("\nSpeech detected! Recording to %s\n", filename);
+        lastRecordedFile = String(filename);
       }
       
       // Write audio data
       wavFile.write((uint8_t*)buffer, validSamples * 2);
       samplesWritten += validSamples;
-      
+      Serial.printf("o");      
     } else {
+      Serial.printf(".");
       if (recording) {
-        Serial.println("Silence detected. Recording: true");
+        if (debugCounter % 100 == 1) {
+          Serial.printf("Silence detected %d times. Recording: %s \n", silenceBlocks, recording ? "true" : "false");
+        }
+
         // Still write the buffer even during silence to maintain continuity
         wavFile.write((uint8_t*)buffer, validSamples * 2);
         samplesWritten += validSamples;
@@ -132,13 +139,15 @@ void recordWithSpeechDetection() {
           // Update header with correct sample count
           writeWavHeader(wavFile, SAMPLERATE, samplesWritten);
           wavFile.close();
-          Serial.printf("Recording stopped. Saved %d samples to %s\n", 
-                       samplesWritten, filename);
+          Serial.printf("\nRecording stopped. Saved %d samples to %s\n", samplesWritten, filename);
+          if (uploadMode) {
+            uploadWavFile(String(filename));
+          }
           recording = false;
           silenceBlocks = 0;
         }
       } else {
-        Serial.println("Silence detected. Recording: false");
+        Serial.printf(".");
       }
     }
     
@@ -147,13 +156,14 @@ void recordWithSpeechDetection() {
       if (recording) {
         writeWavHeader(wavFile, SAMPLERATE, samplesWritten);
         wavFile.close();
-        Serial.println("Recording stopped by button press.");
+        Serial.println("\nRecording stopped by button press.");
       }
       Serial.println("Exiting record loop.");
       Serial.println("Stopping.  Button pressed.");
       break;
     }
     
+    digitalWrite(ledPin, HIGH); // LED off
     delay(1); // Small delay to prevent overwhelming the system
 
     // check for 's' stop command
@@ -173,24 +183,109 @@ void recordWithSpeechDetection() {
   }
 }
 
-void testMicrophone() {
-  Serial.println("Testing microphone for 10 seconds...");
+// Function to upload a WAV file to the server
+void uploadWavFile(const String& filePath) {
+  Serial.println("Uploading file: " + filePath);
+
+  File file = SD.open(filePath.c_str(), FILE_READ);
+  if (!file) {
+    Serial.println("Failed to open file for upload!");
+    return;
+  }
+  WiFiClient client;
+  const char* host = "omen";
+  const int httpPort = 3000;
+  if (!client.connect(host, httpPort)) {
+    Serial.println("Connection to server failed");
+    file.close();
+    return;
+  }
+  String url = "/upload";
+  String contentType = "audio/wav";
+  size_t contentLength = file.size();
+  // Send HTTP POST header
+  client.print(String("POST ") + url + " HTTP/1.1\r\n" +
+               "Host: " + host + "\r\n" +
+               "Content-Type: " + contentType + "\r\n" +
+               "Content-Length: " + contentLength + "\r\n" +
+               "Connection: close\r\n\r\n");
+  // Send file data
+  uint8_t buf[512];
+  size_t sent = 0;
+  while (file.available()) {
+    size_t n = file.read(buf, sizeof(buf));
+    client.write(buf, n);
+    sent += n;
+  }
+  file.close();
+  Serial.printf("Uploaded %d bytes to server.\n", sent);
+  // Wait for server response
+  unsigned long timeout = millis();
+  while (client.connected() && !client.available()) {
+    if (millis() - timeout > 5000) {
+      Serial.println("Server timeout");
+      client.stop();
+      return;
+    }
+    delay(10);
+  }
+  String response;
+  while (client.available()) {
+    response += client.readStringUntil('\n');
+  }
+  Serial.println("Server response: " + response.substring(0, 20) + "...");
+  client.stop();
+}
+
+void setThreshold() {
+  Serial.println("Setting threshold for speech detection. Stay silent for 3 seconds...");
   unsigned long startTime = millis();
-  int sampleCount = 0;
-  int32_t maxSample = 0;
-  int32_t minSample = 0;
+  int32_t sampleSum = 0;
+  int32_t sampleCount = 0;
   
-  while (millis() - startTime < 10000) {
+  while (millis() - startTime < 3000) {
     if (i2s.available()) {
       int32_t sample = i2s.read();
       sampleCount++;
+      sampleSum += sample;
+    }
+
+    delay(1);
+  }
+
+  int32_t avgSample = sampleSum / sampleCount;
+  VOLUME_THRESHOLD = avgSample;
+  Serial.printf("Threshold set to: %d\n", VOLUME_THRESHOLD);
+}
+
+void testMicrophone() {
+  Serial.println("Testing microphone for 5 seconds...");
+  unsigned long startTime = millis();
+  int sampleCount = 0;
+  int32_t sampleSum = 0;
+  int32_t maxSample = 0;
+  int32_t minSample = 0;
+  
+  while (millis() - startTime < 5000) {
+    if (i2s.available()) {
+      int32_t sample = i2s.read();
+      sampleCount++;
+      sampleSum += sample;
       
       if (sample > maxSample) maxSample = sample;
       if (sample < minSample) minSample = sample;
       
       if (sampleCount % 1000 == 0) {
-        Serial.printf("Samples: %d, Range: %d to %d\n", 
-                     sampleCount, minSample, maxSample);
+        if (sampleSum / sampleCount > VOLUME_THRESHOLD) {
+          Serial.printf("o");
+        } else {
+          Serial.printf(".");
+        }
+      }
+
+      if (sampleCount % 1000 == 0) {
+        Serial.printf("\nSamples: %d, Range: %d to %d  Average: %d\n", 
+                     sampleCount, minSample, maxSample, sampleSum / sampleCount);
       }
     }
     delay(1);
@@ -201,6 +296,16 @@ void testMicrophone() {
 }
 
 void setup() {
+  // WiFi setup
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.print("WiFi connected. IP address: ");
+  Serial.println(WiFi.localIP());
   Serial.begin(115200);
   while (!Serial) delay(100);
   
@@ -239,11 +344,19 @@ void setup() {
   Serial.println("Commands:");
   Serial.println("- Press button to start/stop recording");
   Serial.println("- Send 't' via serial to test microphone");
+  Serial.println("- Send 'q' via serial to set threshold (quash)");  
   Serial.println("- Send 'r' via serial to start recording");
   Serial.println("- Send 's' via serial to stop");
+  Serial.println("- Send 'u' via serial to toggle upload mode");
+  Serial.println("- Send number (+/-) to adjust threshold");
   
-  // Run initial microphone test
   testMicrophone();
+  setThreshold();
+  recordWithSpeechDetection();
+  if (uploadMode && lastRecordedFile.length() > 0) {
+    Serial.println("Uploading last recorded file...");
+    uploadWavFile(lastRecordedFile);
+  }
 }
 
 void loop() {
@@ -251,16 +364,32 @@ void loop() {
   if (Serial.available()) {
     char cmd = Serial.read();
     if (cmd == 't') {
-      stop = false;
       testMicrophone();
     } else if (cmd == 'r') {
       stop = false;
       Serial.println("Start Recording (command):");
-      digitalWrite(ledPin, LOW); // LED on during recording
       recordWithSpeechDetection();
       digitalWrite(ledPin, HIGH); // LED off
+      if (uploadMode && lastRecordedFile.length() > 0) {
+        Serial.println("Uploading last recorded file...");
+        uploadWavFile(lastRecordedFile);
+      }
     } else if (cmd == 's') {
       stop = true;
+    } else if (cmd == 'q') {
+      setThreshold();
+    } else if (cmd == 'u') {
+      uploadMode = !uploadMode;
+      Serial.printf("Upload mode %s. Will upload after next recording.\n", uploadMode ? "enabled" : "disabled");
+    } else if (isdigit(cmd) || (cmd == '+' || cmd == '-')) {
+      // Adjust threshold based on input
+      String input = Serial.readStringUntil('\n');
+      int adjustment = input.toInt();
+      VOLUME_THRESHOLD += adjustment;
+      Serial.printf("Threshold adjusted to: %d\n", VOLUME_THRESHOLD);
+      testMicrophone();
+    } else {
+      Serial.printf("Unknown command: %c\n", cmd);
     }
   }
   
@@ -268,9 +397,7 @@ void loop() {
   if (!digitalRead(btnPin)) {
     Serial.println("Start Recording (button):");
     delay(200); // Debounce
-    digitalWrite(ledPin, LOW); // LED on during recording
     recordWithSpeechDetection();
-    digitalWrite(ledPin, HIGH); // LED off
     delay(500); // Prevent immediate restart
   }
   

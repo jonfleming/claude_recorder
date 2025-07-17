@@ -1,0 +1,7 @@
+{
+    "C_Cpp.default.compilerPath": "cl.exe",
+    "files.associations": {
+        "*.css": "tailwindcss",
+        "ostream": "cpp"
+    }
+}
