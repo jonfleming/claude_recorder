@@ -85,13 +85,13 @@ void recordWithSpeechDetection() {
     for (int i = 0; i < validSamples; i++) {
       sum += abs(buffer[i]);
     }
-    uint16_t avg = sum / validSamples / 2; // Average volume, divided by 2 for sensitivity
+    uint32_t avg = sum / validSamples / 2; // Average volume, divided by 2 for sensitivity
     
     // Debug output every 100 blocks
     static int debugCounter = 0;
     if (debugCounter++ % 100 == 0) {
-      Serial.printf("\nVolume: %d, Recording: %s, Samples: %d, Threshold: %d\n", 
-                   avg, recording ? "YES" : "NO", validSamples, VOLUME_THRESHOLD);
+      Serial.printf("\nAverage: %d, Recording: %s, Threshold: %d\n", 
+                   avg, recording ? "YES" : "NO", VOLUME_THRESHOLD);
     }
     
     if (avg > VOLUME_THRESHOLD) {
@@ -126,10 +126,6 @@ void recordWithSpeechDetection() {
     } else {
       Serial.printf(".");
       if (recording) {
-        if (debugCounter % 100 == 1) {
-          Serial.printf("Silence detected %d times. Recording: %s \n", silenceBlocks, recording ? "true" : "false");
-        }
-
         // Still write the buffer even during silence to maintain continuity
         wavFile.write((uint8_t*)buffer, validSamples * 2);
         samplesWritten += validSamples;
@@ -139,7 +135,7 @@ void recordWithSpeechDetection() {
           // Update header with correct sample count
           writeWavHeader(wavFile, SAMPLERATE, samplesWritten);
           wavFile.close();
-          Serial.printf("\nRecording stopped. Saved %d samples to %s\n", samplesWritten, filename);
+          Serial.printf("\nSilence detected. Recording stopped. Saved %d samples to %s\n", samplesWritten, filename);
           if (uploadMode) {
             uploadWavFile(String(filename));
           }
@@ -265,6 +261,7 @@ void testMicrophone() {
   int32_t sampleSum = 0;
   int32_t maxSample = 0;
   int32_t minSample = 0;
+  int32_t avg = 0;
   
   while (millis() - startTime < 5000) {
     if (i2s.available()) {
@@ -275,8 +272,9 @@ void testMicrophone() {
       if (sample > maxSample) maxSample = sample;
       if (sample < minSample) minSample = sample;
       
-      if (sampleCount % 1000 == 0) {
-        if (sampleSum / sampleCount > VOLUME_THRESHOLD) {
+      if (sampleCount % 10 == 0) {
+        avg = (sampleSum / sampleCount) * 2;
+        if (avg > VOLUME_THRESHOLD) {
           Serial.printf("o");
         } else {
           Serial.printf(".");
@@ -284,14 +282,17 @@ void testMicrophone() {
       }
 
       if (sampleCount % 1000 == 0) {
-        Serial.printf("\nSamples: %d, Range: %d to %d  Average: %d\n", 
-                     sampleCount, minSample, maxSample, sampleSum / sampleCount);
+        Serial.printf("\nSamples: %d, Range: %d to %d  Average: %d  Threshold: %d\n", 
+                     sampleCount, minSample, maxSample, avg, VOLUME_THRESHOLD);
+        sampleSum = 0;
+        maxSample = 0;
+        minSample = 0;                     
       }
     }
     delay(1);
   }
   
-  Serial.printf("Test complete. Total samples: %d\n", sampleCount);
+  Serial.printf("\nTest complete. Total samples: %d\n", sampleCount);
   Serial.printf("Sample range: %d to %d\n", minSample, maxSample);
 }
 
@@ -362,10 +363,10 @@ void setup() {
 void loop() {
   // Check for serial commands
   if (Serial.available()) {
-    char cmd = Serial.read();
-    if (cmd == 't') {
+    String cmd = Serial.readStringUntil('\n');
+    if (cmd == "t") {
       testMicrophone();
-    } else if (cmd == 'r') {
+    } else if (cmd == "r") {
       stop = false;
       Serial.println("Start Recording (command):");
       recordWithSpeechDetection();
@@ -374,22 +375,23 @@ void loop() {
         Serial.println("Uploading last recorded file...");
         uploadWavFile(lastRecordedFile);
       }
-    } else if (cmd == 's') {
+    } else if (cmd == "s") {
       stop = true;
-    } else if (cmd == 'q') {
+    } else if (cmd == "q") {
       setThreshold();
-    } else if (cmd == 'u') {
+      testMicrophone(); 
+    } else if (cmd == "u") {
       uploadMode = !uploadMode;
       Serial.printf("Upload mode %s. Will upload after next recording.\n", uploadMode ? "enabled" : "disabled");
-    } else if (isdigit(cmd) || (cmd == '+' || cmd == '-')) {
+    } else if (isdigit(cmd.charAt(0)) || (cmd.charAt(0) == '+' || cmd.charAt(0) == '-')) {
       // Adjust threshold based on input
-      String input = Serial.readStringUntil('\n');
-      int adjustment = input.toInt();
+      Serial.println("Input received: " + cmd);
+      int adjustment = cmd.toInt();
       VOLUME_THRESHOLD += adjustment;
       Serial.printf("Threshold adjusted to: %d\n", VOLUME_THRESHOLD);
       testMicrophone();
     } else {
-      Serial.printf("Unknown command: %c\n", cmd);
+      Serial.printf("Unknown command: %s\n", cmd);
     }
   }
   
