@@ -54,126 +54,112 @@ void recordWithSpeechDetection() {
   File wavFile;
   uint32_t samplesWritten = 0;
   int silenceBlocks = 0;
-  
   Serial.println("Listening for speech...");
-  while (1) {
+
+  auto startRecording = [&]() {
+    sprintf(filename, "/audio%d.wav", fileCount++);
+    wavFile = SD.open(filename, FILE_WRITE);
+    if (!wavFile) {
+      Serial.println("Failed to open file for writing!");
+      return false;
+    }
+    byte header[44] = {0};
+    wavFile.write(header, 44);
+    samplesWritten = 0;
+    recording = true;
+    digitalWrite(ledPin, LOW);
+    Serial.printf("\nSpeech detected! Recording to %s\n", filename);
+    lastRecordedFile = String(filename);
+    return true;
+  };
+
+  auto stopRecording = [&](const char* reason) {
+    writeWavHeader(wavFile, SAMPLERATE, samplesWritten);
+    wavFile.close();
+    Serial.printf("\n%s. Saved %d samples to %s\n", reason, samplesWritten, filename);
+    if (uploadMode) {
+      uploadWavFile(String(filename));
+    }
+    recording = false;
+    silenceBlocks = 0;
+  };
+
+  static int debugCounter = 0;
+  while (true) {
     int validSamples = 0;
-    
-    // Fill buffer with available samples
     for (int i = 0; i < BUFFER_SIZE; i++) {
       if (i2s.available()) {
         int32_t sample = i2s.read();
-        
-        // Convert 32-bit sample to 16-bit and apply gain
-        buffer[i] = (int16_t)((sample & 0xFFFF) * 2); // Use lower 16 bits
-        // Or apply gain: buffer[i] = (int16_t)((sample >> 16) * 2); // 2x gain
-        
+        int16_t sample16 = (int16_t)(sample & 0xFFFF) * 2; // Convert to 16-bit
+        buffer[i] = sample16;
         validSamples++;
       } else {
-        // No more data available
         break;
       }
     }
-    
     if (validSamples == 0) {
       delay(1);
       continue;
     }
-    
-    // Calculate RMS for volume detection
+
     uint32_t sum = 0;
     for (int i = 0; i < validSamples; i++) {
       sum += abs(buffer[i]);
     }
-    uint32_t avg = sum / validSamples / 2; // Average volume, divided by 2 for sensitivity
-    
-    // Debug output every 100 blocks
-    static int debugCounter = 0;
-    if (debugCounter++ % 100 == 0) {
-      Serial.printf("\nAverage: %d, Recording: %s, Threshold: %d\n", 
-                   avg, recording ? "YES" : "NO", VOLUME_THRESHOLD);
-    }
-    
-    if (avg > VOLUME_THRESHOLD) {
-      digitalWrite(ledPin, LOW);
-      if (debugCounter % 100 == 1) {
-        Serial.printf("Avg: %d > Threshold: %d\n", avg, VOLUME_THRESHOLD);
-      }
+    uint32_t avg = sum / validSamples;
 
+    if (debugCounter++ % 100 == 0) {
+      Serial.printf("\nAverage: %d, Recording: %s, Threshold: %d\n", avg, recording ? "YES" : "NO", VOLUME_THRESHOLD);
+    }
+
+    bool aboveThreshold = avg > VOLUME_THRESHOLD;
+    digitalWrite(ledPin, aboveThreshold ? LOW : HIGH);
+
+    if (aboveThreshold) {
       silenceBlocks = 0;
-      
       if (!recording) {
-        sprintf(filename, "/audio%d.wav", fileCount++);
-        wavFile = SD.open(filename, FILE_WRITE);
-        if (!wavFile) {
-          Serial.println("Failed to open file for writing!");
-          return;
-        }
-        // Write placeholder header (will be updated later)
-        byte header[44] = {0};
-        wavFile.write(header, 44);
-        samplesWritten = 0;
-        recording = true;
-        digitalWrite(ledPin, LOW); // LED on during recording
-        Serial.printf("\nSpeech detected! Recording to %s\n", filename);
-        lastRecordedFile = String(filename);
+        if (!startRecording()) return;
       }
-      
-      // Write audio data
       wavFile.write((uint8_t*)buffer, validSamples * 2);
       samplesWritten += validSamples;
-      Serial.printf("o");      
+      Serial.printf("o");
     } else {
       Serial.printf(".");
       if (recording) {
-        // Still write the buffer even during silence to maintain continuity
         wavFile.write((uint8_t*)buffer, validSamples * 2);
         samplesWritten += validSamples;
-        
         silenceBlocks++;
         if (silenceBlocks > SILENCE_BLOCKS) {
-          // Update header with correct sample count
-          writeWavHeader(wavFile, SAMPLERATE, samplesWritten);
-          wavFile.close();
-          Serial.printf("\nSilence detected. Recording stopped. Saved %d samples to %s\n", samplesWritten, filename);
-          if (uploadMode) {
-            uploadWavFile(String(filename));
-          }
-          recording = false;
-          silenceBlocks = 0;
+          stopRecording("Silence detected. Recording stopped");
         }
-      } else {
-        Serial.printf(".");
       }
     }
+
+    delay(1);
     
-    // Check for button press to exit
+    // Button or serial stop
     if (!digitalRead(btnPin)) {
       if (recording) {
-        writeWavHeader(wavFile, SAMPLERATE, samplesWritten);
-        wavFile.close();
-        Serial.println("\nRecording stopped by button press.");
+        stopRecording("Recording stopped by button press");
       }
-      Serial.println("Exiting record loop.");
-      Serial.println("Stopping.  Button pressed.");
+      Serial.println("Exiting record loop. Button pressed.");
       break;
     }
-    
-    digitalWrite(ledPin, HIGH); // LED off
-    delay(1); // Small delay to prevent overwhelming the system
 
-    // check for 's' stop command
     if (Serial.available()) {
-      char cmd = Serial.read();
-      if (cmd == 's') {
-        Serial.println("Stopping.  S command received.");
-        stop = true;        
+      String cmd = Serial.readStringUntil('\n');
+      if (cmd == "s") {
+        if (recording) {
+          stopRecording("Recording stopped by command");
+        }
+        Serial.println("\nStopping. S command received.");
+        stop = true;
         break;
       }
     }
 
     if (stop) {
-      Serial.println("Stopping.  stop == true.");      
+      Serial.println("Stopping. stop == true.");
       break;
     }
   }
@@ -242,8 +228,10 @@ void setThreshold() {
   while (millis() - startTime < 3000) {
     if (i2s.available()) {
       int32_t sample = i2s.read();
+      int16_t sample16 = (int16_t)(sample & 0xFFFF) * 2; // Convert to 16-bit
+
       sampleCount++;
-      sampleSum += sample;
+      sampleSum += sample16;
     }
 
     delay(1);
@@ -260,20 +248,24 @@ void testMicrophone() {
   int sampleCount = 0;
   int32_t sampleSum = 0;
   int32_t maxSample = 0;
-  int32_t minSample = 0;
+  int32_t minSample = VOLUME_THRESHOLD;
   int32_t avg = 0;
-  
+
   while (millis() - startTime < 5000) {
     if (i2s.available()) {
       int32_t sample = i2s.read();
+      int16_t sample16 = (int16_t)(sample & 0xFFFF) * 2; // Convert to 16-bit
+      if (sampleCount % 200 == 0) {
+        Serial.println(sample16);
+      }
       sampleCount++;
-      sampleSum += sample;
-      
-      if (sample > maxSample) maxSample = sample;
-      if (sample < minSample) minSample = sample;
-      
+      sampleSum += sample16;
+
+      if (sample16 > maxSample) maxSample = sample16;
+      if (sample16 < minSample) minSample = sample16;
+
       if (sampleCount % 10 == 0) {
-        avg = (sampleSum / sampleCount) * 2;
+        avg = sampleSum / sampleCount;        
         if (avg > VOLUME_THRESHOLD) {
           Serial.printf("o");
         } else {
@@ -284,16 +276,14 @@ void testMicrophone() {
       if (sampleCount % 1000 == 0) {
         Serial.printf("\nSamples: %d, Range: %d to %d  Average: %d  Threshold: %d\n", 
                      sampleCount, minSample, maxSample, avg, VOLUME_THRESHOLD);
+        sampleCount = 0;
         sampleSum = 0;
         maxSample = 0;
-        minSample = 0;                     
+        minSample = VOLUME_THRESHOLD;
       }
     }
     delay(1);
-  }
-  
-  Serial.printf("\nTest complete. Total samples: %d\n", sampleCount);
-  Serial.printf("Sample range: %d to %d\n", minSample, maxSample);
+  } 
 }
 
 void setup() {
@@ -355,7 +345,6 @@ void setup() {
   setThreshold();
   recordWithSpeechDetection();
   if (uploadMode && lastRecordedFile.length() > 0) {
-    Serial.println("Uploading last recorded file...");
     uploadWavFile(lastRecordedFile);
   }
 }
