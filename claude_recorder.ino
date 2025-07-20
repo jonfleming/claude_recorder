@@ -556,7 +556,6 @@ void setup() {
   testMicrophone();
   setThreshold();
   recordWithSpeechDetectionEnhanced();
-  uploadWavFile(lastRecordedFile);
 }
 
 void loop() {
@@ -572,7 +571,6 @@ void loop() {
       log(0, logMessage);
       recordWithSpeechDetectionEnhanced();
       digitalWrite(ledPin, HIGH); // LED off
-      uploadWavFile(lastRecordedFile);
     } else if (cmd == "s") {
       stop = true;
     } else if (cmd == "q") {
