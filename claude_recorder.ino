@@ -2,7 +2,6 @@
 const char* ssid = "FLEMING";
 const char* password = "aMi4mTsg";
 String lastRecordedFile = "";
-bool uploadMode = true;
 #include "ESP_I2S.h"
 #include "FS.h"
 #include "SD.h"
@@ -252,9 +251,7 @@ void recordWithSpeechDetectionEnhanced() {
     sprintf(logMessage, "\n%s. Saved %d samples to %s\n", reason, samplesWritten, filename);
     log(0, logMessage);
     
-    if (uploadMode) {
-      uploadWavFile(String(filename));
-    }
+    uploadWavFile(String(filename));
     recording = false;
     silenceBlocks = 0;
     speechBlocks = 0;
@@ -559,9 +556,7 @@ void setup() {
   testMicrophone();
   setThreshold();
   recordWithSpeechDetectionEnhanced();
-  if (uploadMode && lastRecordedFile.length() > 0) {
-    uploadWavFile(lastRecordedFile);
-  }
+  uploadWavFile(lastRecordedFile);
 }
 
 void loop() {
@@ -577,20 +572,12 @@ void loop() {
       log(0, logMessage);
       recordWithSpeechDetectionEnhanced();
       digitalWrite(ledPin, HIGH); // LED off
-      if (uploadMode && lastRecordedFile.length() > 0) {
-        sprintf(logMessage,"Uploading last recorded file...");
-        log(0, logMessage);
-        uploadWavFile(lastRecordedFile);
-      }
+      uploadWavFile(lastRecordedFile);
     } else if (cmd == "s") {
       stop = true;
     } else if (cmd == "q") {
       setThreshold();
       testMicrophone(); 
-    } else if (cmd == "u") {
-      uploadMode = !uploadMode;
-      sprintf(logMessage,"Upload mode %s. Will upload after next recording.\n", uploadMode ? "enabled" : "disabled");
-      log(0, logMessage);
     } else if (isdigit(cmd.charAt(0)) || (cmd.charAt(0) == '+' || cmd.charAt(0) == '-')) {
       // Adjust threshold based on input
       sprintf(logMessage,"Input received: %s", cmd);
