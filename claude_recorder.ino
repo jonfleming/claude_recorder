@@ -25,7 +25,7 @@ int historyIndex = 0;
 bool historyFull = false;
 
 const uint32_t SAMPLERATE = 16000;
-const int BUFFER_SIZE = 512; // Reduced buffer size for better responsiveness
+const int BUFFER_SIZE = 256; // Reduced buffer size for better responsiveness
 const int SILENCE_BLOCKS = 5; // Reduced silence blocks
 const byte btnPin = D7;
 const byte ledPin = BUILTIN_LED;
@@ -266,8 +266,22 @@ void recordWithSpeechDetectionEnhanced() {
         buffer[i] = sample16;
         validSamples++;
 
-        sprintf(logMessage, "%d", sample16);
-        log(1, logMessage);
+        // sprintf(logMessage, "%d", sample16);
+        // log(1, logMessage);
+
+        // // Debugging sample rate
+        // static unsigned long lastTime = 0;
+        // static int sampleCounter = 0;
+        // sampleCounter += validSamples;
+
+        // if (millis() - lastTime > 1000) {
+        //   float actualSampleRate = (float)sampleCounter;
+        //   sprintf(logMessage, "Actual sample rate: %.1f Hz\n", actualSampleRate);
+        //   log(0, logMessage);
+        //   sampleCounter = 0;
+        //   lastTime = millis();
+        // }
+
       } else {
         log(3, "No data available\n");
         break;
@@ -281,14 +295,14 @@ void recordWithSpeechDetectionEnhanced() {
 
     // Use multiple detection methods
     debugCounter++;
-    bool method1 = detectSpeechSpectral(buffer, validSamples, SAMPLERATE); // Spectral:
-    bool method2 = detectSpeechAdaptive(buffer, validSamples);             // Level:
-    bool method3 = detectSpeechTemporal(buffer, validSamples);             // Avg:
+    // bool method1 = detectSpeechSpectral(buffer, validSamples, SAMPLERATE); // Spectral:
+    // bool method2 = detectSpeechAdaptive(buffer, validSamples);             // Level:
+    // bool method3 = detectSpeechTemporal(buffer, validSamples);             // Avg:
     
-    // Voting system - require majority agreement
-    int votes = (method1 ? 1 : 0) + (method2 ? 1 : 0) + (method3 ? 1 : 0);
-    bool speechDetected = votes >= 2;  // Require at least 2 out of 3 methods to agree
-
+    // // Voting system - require majority agreement
+    // int votes = (method1 ? 1 : 0) + (method2 ? 1 : 0) + (method3 ? 1 : 0);
+    // bool speechDetected = votes >= 2;  // Require at least 2 out of 3 methods to agree
+    bool speechDetected = true;
     digitalWrite(ledPin, speechDetected ? LOW : HIGH);
 
     sprintf(logMessage, "Speech detected: %s\n", speechDetected ? "YES" : "NO");
